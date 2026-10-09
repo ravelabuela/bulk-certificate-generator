@@ -1,0 +1,601 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bulk Certificate Generator</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #f3f5f9;
+            color: #202938;
+        }
+
+        header {
+            background: #172554;
+            color: white;
+            padding: 24px 8%;
+        }
+
+        header h1 {
+            margin: 0 0 8px;
+            font-size: 26px;
+        }
+
+        header p {
+            margin: 0;
+            color: #dbeafe;
+        }
+
+        main {
+            max-width: 900px;
+            margin: 30px auto;
+            padding: 0 18px;
+        }
+
+        .card {
+            background: white;
+            padding: 24px;
+            margin-bottom: 22px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px #17255412;
+        }
+
+        h2 {
+            margin-top: 0;
+            font-size: 20px;
+        }
+
+        label {
+            display: block;
+            margin: 15px 0 7px;
+            font-weight: bold;
+        }
+
+        input {
+            width: 100%;
+            padding: 11px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            font-size: 15px;
+        }
+
+        input:focus {
+            outline: 2px solid #93c5fd;
+            border-color: #2563eb;
+        }
+
+        .recipient {
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 14px;
+        }
+
+        .recipient-title {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .recipient-title h3 {
+            font-size: 16px;
+            margin: 0;
+        }
+
+        button {
+            border: none;
+            border-radius: 6px;
+            padding: 11px 16px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: wait;
+        }
+
+        .primary {
+            background: #2563eb;
+            color: white;
+        }
+
+        .secondary {
+            background: #e8efff;
+            color: #1d4ed8;
+        }
+
+        .remove {
+            background: #fee2e2;
+            color: #b91c1c;
+        }
+
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        #message {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            margin-top: 15px;
+            line-height: 1.6;
+        }
+
+        .success {
+            color: #15803d;
+        }
+
+        .error {
+            color: #b91c1c;
+        }
+
+        .result {
+            border-top: 1px solid #e2e8f0;
+            padding: 15px 0;
+        }
+
+        .result p {
+            margin: 6px 0;
+            overflow-wrap: anywhere;
+        }
+
+        .download {
+            display: inline-block;
+            margin-top: 8px;
+            color: #1d4ed8;
+            font-weight: bold;
+        }
+
+        .summary {
+            line-height: 1.8;
+            overflow-wrap: anywhere;
+        }
+
+        footer {
+            text-align: center;
+            color: #64748b;
+            padding: 20px;
+            font-size: 13px;
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <h1>Bulk Certificate Generator</h1>
+        <p>Generate and download certificates for multiple recipients.</p>
+    </header>
+
+    <main>
+        <section class="card">
+            <h2>Event Details</h2>
+
+            <form id="certificateForm">
+                <label for="eventName">Event Name</label>
+                <input
+                    id="eventName"
+                    type="text"
+                    maxlength="200"
+                    placeholder="Example: Python Workshop"
+                    required
+                >
+
+                <label for="issueDate">Issue Date</label>
+                <input id="issueDate" type="date" required>
+
+                <h2 style="margin-top: 28px;">Recipients</h2>
+
+                <div id="recipients"></div>
+
+                <div class="actions">
+                    <button
+                        type="button"
+                        class="secondary"
+                        id="addRecipient"
+                    >
+                        + Add Recipient
+                    </button>
+
+                    <button
+                        type="submit"
+                        class="primary"
+                        id="generateButton"
+                    >
+                        Generate Certificates
+                    </button>
+                </div>
+
+                <div id="message" role="status" aria-live="polite"></div>
+            </form>
+        </section>
+
+        <section class="card" id="resultsCard" hidden>
+            <h2>Generation Results</h2>
+            <div id="jobSummary" class="summary"></div>
+            <div id="certificateResults"></div>
+        </section>
+    </main>
+
+    <footer>Bulk Certificate Generator · Python + FastAPI</footer>
+
+    <script>
+        const API_BASE = window.location.port === "8000"
+            ? window.location.origin
+            : "http://127.0.0.1:8000";
+
+        const form = document.getElementById("certificateForm");
+        const recipientsContainer =
+            document.getElementById("recipients");
+        const message = document.getElementById("message");
+        const generateButton =
+            document.getElementById("generateButton");
+        const resultsCard = document.getElementById("resultsCard");
+        const jobSummary = document.getElementById("jobSummary");
+        const certificateResults =
+            document.getElementById("certificateResults");
+
+        let recipientCount = 0;
+
+        function showMessage(text, type = "") {
+            message.textContent = text;
+            message.className = type;
+        }
+
+        function addTextElement(parent, tag, text, className = "") {
+            const element = document.createElement(tag);
+            element.textContent = text;
+
+            if (className) {
+                element.className = className;
+            }
+
+            parent.appendChild(element);
+            return element;
+        }
+
+        function addRecipient() {
+            if (recipientsContainer.children.length >= 500) {
+                showMessage("Maximum 500 recipients allowed.", "error");
+                return;
+            }
+
+            recipientCount++;
+
+            const recipient = document.createElement("div");
+            recipient.className = "recipient";
+
+            const titleRow = document.createElement("div");
+            titleRow.className = "recipient-title";
+
+            const title = document.createElement("h3");
+            title.textContent = "Recipient " + recipientCount;
+
+            const removeButton = document.createElement("button");
+            removeButton.type = "button";
+            removeButton.className = "remove";
+            removeButton.textContent = "Remove";
+
+            removeButton.addEventListener("click", () => {
+                recipient.remove();
+            });
+
+            titleRow.append(title, removeButton);
+
+            const nameLabel = document.createElement("label");
+            nameLabel.textContent = "Full Name";
+
+            const nameInput = document.createElement("input");
+            nameInput.type = "text";
+            nameInput.className = "recipient-name";
+            nameInput.placeholder = "Recipient's full name";
+            nameInput.required = true;
+
+            const emailLabel = document.createElement("label");
+            emailLabel.textContent = "Email Address";
+
+            const emailInput = document.createElement("input");
+            emailInput.type = "email";
+            emailInput.className = "recipient-email";
+            emailInput.placeholder = "name@example.com";
+            emailInput.required = true;
+
+            recipient.append(
+                titleRow,
+                nameLabel,
+                nameInput,
+                emailLabel,
+                emailInput
+            );
+
+            recipientsContainer.appendChild(recipient);
+            showMessage("");
+        }
+
+        document.getElementById("addRecipient").addEventListener(
+            "click",
+            addRecipient
+        );
+
+        async function readResponse(response) {
+            const text = await response.text();
+
+            let data;
+
+            try {
+                data = text ? JSON.parse(text) : {};
+            } catch {
+                throw new Error(
+                    "The server returned an unexpected response. " +
+                    "Check that the FastAPI server is running."
+                );
+            }
+
+            if (!response.ok) {
+                let detail = data.detail || data.message;
+
+                if (Array.isArray(detail)) {
+                    detail = detail.map((item) => {
+                        const location = Array.isArray(item.loc)
+                            ? item.loc.join(" → ")
+                            : "Input";
+
+                        return location + ": " + item.msg;
+                    }).join("\n");
+                } else if (typeof detail === "object" && detail !== null) {
+                    detail = JSON.stringify(detail);
+                }
+
+                throw new Error(
+                    detail || "Request failed with status " + response.status
+                );
+            }
+
+            return data;
+        }
+
+        async function getJobStatus(jobId) {
+            const response = await fetch(
+                `${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/`
+            );
+
+            return readResponse(response);
+        }
+
+        async function getCertificates(jobId) {
+            const response = await fetch(
+                `${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/certificates/`
+            );
+
+            return readResponse(response);
+        }
+
+        async function displayResults(jobId) {
+            resultsCard.hidden = false;
+            jobSummary.replaceChildren();
+            certificateResults.replaceChildren();
+
+            const summary = await getJobStatus(jobId);
+
+            addTextElement(
+                jobSummary, "p", "Job ID: " + summary.job_id
+            );
+            addTextElement(
+                jobSummary, "p", "Event: " + summary.event_name
+            );
+            addTextElement(
+                jobSummary, "p", "Status: " + summary.status
+            );
+            addTextElement(
+                jobSummary, "p", "Total: " + summary.total_count
+            );
+            addTextElement(
+                jobSummary, "p", "Successful: " + summary.success_count
+            );
+            addTextElement(
+                jobSummary, "p", "Failed: " + summary.failed_count
+            );
+
+            const certificates = await getCertificates(jobId);
+
+            if (certificates.length === 0) {
+                addTextElement(
+                    certificateResults,
+                    "p",
+                    "No certificate records were found for this job."
+                );
+                return summary;
+            }
+
+            certificates.forEach((certificate) => {
+                const item = document.createElement("div");
+                item.className = "result";
+
+                addTextElement(
+                    item,
+                    "h3",
+                    certificate.recipient_name || "Unnamed recipient"
+                );
+
+                addTextElement(
+                    item,
+                    "p",
+                    "Email: " + (certificate.recipient_email || "")
+                );
+
+                addTextElement(
+                    item,
+                    "p",
+                    "Status: " + certificate.status
+                );
+
+                if (certificate.error_message) {
+                    addTextElement(
+                        item,
+                        "p",
+                        "Error: " + certificate.error_message,
+                        "error"
+                    );
+                }
+
+                if (
+                    certificate.status === "SUCCESS" &&
+                    certificate.download_url
+                ) {
+                    const link = document.createElement("a");
+                    link.className = "download";
+                    link.href = API_BASE + certificate.download_url;
+                    link.textContent = "Download PDF";
+                    link.target = "_blank";
+                    link.rel = "noopener noreferrer";
+
+                    item.appendChild(link);
+                }
+
+                certificateResults.appendChild(item);
+            });
+
+            return summary;
+        }
+
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+
+            showMessage("");
+            resultsCard.hidden = true;
+
+            const recipientElements = [
+                ...recipientsContainer.querySelectorAll(".recipient")
+            ];
+
+            if (recipientElements.length === 0) {
+                showMessage(
+                    "Please add at least one recipient.",
+                    "error"
+                );
+                return;
+            }
+
+            const recipients = recipientElements.map((element) => ({
+                name: element.querySelector(".recipient-name").value.trim(),
+                email: element.querySelector(".recipient-email").value.trim()
+            }));
+
+            if (recipients.some((person) => !person.name || !person.email)) {
+                showMessage(
+                    "Please provide a name and email for every recipient.",
+                    "error"
+                );
+                return;
+            }
+
+            const requestBody = {
+                event_name:
+                    document.getElementById("eventName").value.trim(),
+                issue_date:
+                    document.getElementById("issueDate").value,
+                recipients: recipients
+            };
+
+            generateButton.disabled = true;
+            generateButton.textContent = "Generating...";
+            showMessage("Submitting your certificate job...");
+
+            try {
+                const response = await fetch(`${API_BASE}/api/jobs/`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Accept": "application/json"
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+
+                const data = await readResponse(response);
+
+                if (!data.job_id) {
+                    throw new Error(
+                        "The server did not return a job ID."
+                    );
+                }
+
+                showMessage(
+                    "Job submitted! Generating certificates, please wait...",
+                    "success"
+                );
+
+                let finalStatus = null;
+
+                for (let attempt = 0; attempt < 30; attempt++) {
+                    finalStatus = await getJobStatus(data.job_id);
+
+                    if (
+                        finalStatus.status === "COMPLETED" ||
+                        finalStatus.status === "FAILED"
+                    ) {
+                        break;
+                    }
+
+                    await new Promise((resolve) =>
+                        setTimeout(resolve, 1000)
+                    );
+                }
+
+                finalStatus = await displayResults(data.job_id);
+
+                if (finalStatus.status === "COMPLETED") {
+                    showMessage(
+                        "Certificate job finished! " +
+                        "Use the Download PDF links below.",
+                        "success"
+                    );
+                } else if (finalStatus.status === "FAILED") {
+                    showMessage(
+                        "The job failed. Check the status and error details below.",
+                        "error"
+                    );
+                } else {
+                    showMessage(
+                        "Your job is still processing. " +
+                        "Wait a little and click Generate again only for a new job. " +
+                        "Your submitted job ID is: " + data.job_id,
+                        ""
+                    );
+                }
+
+                resultsCard.scrollIntoView({
+                    behavior: "smooth",
+                    block: "start"
+                });
+
+            } catch (error) {
+                console.error("Certificate generation error:", error);
+
+                showMessage(
+                    "Could not generate certificates:\n" +
+                    error.message +
+                    "\n\nCheck that FastAPI is running at " + API_BASE,
+                    "error"
+                );
+            } finally {
+                generateButton.disabled = false;
+                generateButton.textContent = "Generate Certificates";
+            }
+        });
+
+        addRecipient();
+    </script>
+</body>
+</html>

@@ -1,152 +1,106 @@
 # Bulk Certificate Generator
 
-A Python-based REST API that generates PDF certificates for multiple recipients in a single request. It tracks job progress, stores recipient details in SQLite, and handles individual recipient failures without stopping the entire batch.
+A FastAPI service that accepts one request containing many recipients,
+generates a personalized PDF certificate for every valid recipient, and keeps
+a durable record of job and item status.
 
 ## Features
 
-* Generate certificates in bulk using a single API request.
-* Create personalized PDF certificates using ReportLab.
-* Store job and recipient information in SQLite.
-* Track job status, total recipients, successful certificates, and failures.
-* Handle invalid recipient data independently.
-* Download generated certificates using their certificate IDs.
-* Test API endpoints using Pytest.
+- Submit up to 500 recipients in one request.
+- Generate a PDF from one predefined ReportLab certificate template.
+- Track a job's `PENDING`, `PROCESSING`, `COMPLETED`, or `FAILED` status.
+- Isolate recipient failures: one bad recipient does not stop the batch.
+- List individual results and download successful PDFs.
+- Includes API and PDF-generation tests.
 
-## Technology Stack
+## Technology
 
-* **Language:** Python
-* **API Framework:** FastAPI
-* **Database:** SQLite
-* **ORM:** SQLAlchemy
-* **PDF Generation:** ReportLab
-* **Testing:** Pytest, FastAPI TestClient
+Python, FastAPI, SQLAlchemy, SQLite, ReportLab, and pytest.
 
-## Project Structure
-
-```text
-bulk-certificate-generator/
-├── main.py
-├── database.py
-├── models.py
-├── certificate.py
-├── requirements.txt
-├── README.md
-├── tests/
-│   └── test_api.py
-└── certificates/
-```
-
-## Installation
-
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/YOUR-USERNAME/bulk-certificate-generator.git
-cd bulk-certificate-generator
-```
-
-Replace `YOUR-USERNAME` with your GitHub username.
-
-### 2. Create and activate a virtual environment
-
-Windows:
+## Setup and Run
 
 ```powershell
 python -m venv venv
 venv\Scripts\activate
-```
-
-### 3. Install dependencies
-
-```bash
 python -m pip install -r requirements.txt
-```
-
-### 4. Start the application
-
-```bash
 uvicorn main:app --reload
 ```
 
-Open the interactive API documentation:
+The interactive API documentation is available at
+`http://127.0.0.1:8000/docs`.
 
-http://127.0.0.1:8000/docs
+The browser client is available at `http://127.0.0.1:8000/app/`.
 
-## API Endpoints
+## Submit a Job
 
-| Method | Endpoint                              | Description                    |
-| ------ | ------------------------------------- | ------------------------------ |
-| GET    | `/`                                   | Check API status               |
-| POST   | `/api/jobs/`                          | Submit a bulk certificate job  |
-| GET    | `/api/jobs/{job_id}/`                 | Retrieve job status and counts |
-| GET    | `/api/jobs/{job_id}/certificates/`    | List certificates for a job    |
-| GET    | `/api/certificates/{certificate_id}/` | Download a certificate PDF     |
-
-## Example Request
-
-Send a POST request to `/api/jobs/` with this JSON body:
+`POST /api/jobs/` returns `202 Accepted` because the work starts in a FastAPI
+background task.
 
 ```json
 {
   "event_name": "Python Workshop",
   "issue_date": "2026-10-09",
   "recipients": [
-    {
-      "name": "Ravela Buela",
-      "email": "ravela@example.com"
-    },
-    {
-      "name": "Priya",
-      "email": "priya@example.com"
-    }
+    {"name": "Ravela Buela", "email": "ravela@example.com"},
+    {"name": "Priya", "email": "priya@example.com"}
   ]
 }
 ```
 
-The API returns a job ID that can be used to check the job status and retrieve individual certificate IDs.
-
-## Example Job Status
+Example response:
 
 ```json
 {
-  "job_id": "your-job-id",
-  "event_name": "Python Workshop",
-  "status": "COMPLETED",
+  "job_id": "4c1a...",
+  "status": "PENDING",
   "total_count": 2,
-  "success_count": 2,
-  "failed_count": 0
+  "message": "Certificate generation job submitted"
 }
 ```
 
-## Run Tests
+## API
 
-From the project root directory, execute:
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| GET | `/` | Health check |
+| POST | `/api/jobs/` | Submit a bulk generation job |
+| GET | `/api/jobs/{job_id}/` | Get job status and progress counts |
+| GET | `/api/jobs/{job_id}/certificates/` | List every recipient result |
+| GET | `/api/certificates/{certificate_id}/` | Download a generated PDF |
 
-```bash
+Poll the job endpoint until its status is `COMPLETED` or `FAILED`. During
+`PROCESSING`, `success_count + failed_count` is the number of recipients
+already processed. List the job's certificates next; successful entries expose
+a `download_url`, which can be requested to retrieve the PDF.
+
+## Validation and Failure Handling
+
+The API validates required fields, non-empty event names, ISO dates in
+`YYYY-MM-DD` format, a non-empty recipient list, and the 500-recipient limit.
+Email validation occurs per recipient during background processing. This is
+deliberate: an invalid email is stored as a failed item with an error message,
+rather than rejecting the whole bulk request. Any PDF-generation exception is
+handled the same way.
+
+## Tests
+
+```powershell
 python -m pytest -v
 ```
 
-The initial automated test suite contains four tests covering the home endpoint, unknown jobs, job creation, and empty recipient validation.
+Tests use an in-memory SQLite database and cover job creation, validation, PDF
+creation, status/progress results, individual failures, and retrieval.
 
-## Error Handling
+## Design Decisions
 
-Each recipient is processed independently. Invalid recipient data is marked as failed, while other valid recipients can still receive certificates.
+`BackgroundTasks` is a good lightweight fit for this assignment: the client
+gets a job ID immediately and can observe progress while the request's items
+are processed one at a time. Each item is committed independently, so results
+already created remain recorded if a later item fails. SQLite and local PDF
+storage make the project self-contained. In production, use a durable queue
+and workers (such as Celery or RQ), a production relational database, and
+object storage for PDFs.
 
-## Future Improvements
-
-* Add isolated test database fixtures.
-* Improve input validation and issue-date validation.
-* Add authentication and authorization.
-* Use a dedicated background task queue for production workloads.
-* Add a downloadable ZIP archive for completed certificate batches.
-* Add configurable certificate templates.
-
-## Author
-
-**Ravela Buela**
-
-GitHub: https://github.com/buela-ravela
-
----
-
-*This project was developed as a Python backend assignment to demonstrate REST API development, database integration, PDF generation, and automated testing.*
+The optional browser client lives in `frontend/index.html` and is served at
+`/app/` by the FastAPI process. It can also be opened from a separate static
+server; in that case it falls back to `http://127.0.0.1:8000` for API calls.

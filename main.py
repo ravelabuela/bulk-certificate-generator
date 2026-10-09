@@ -1,10 +1,20 @@
 
 from uuid import uuid4
-from typing import Any
-
+from pathlib import Path
 from fastapi import FastAPI, Depends, BackgroundTasks, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from fastapi.staticfiles import StaticFiles
+from datetime import date
+
+from pydantic import (
+    BaseModel,
+    Field,
+    field_validator,
+    TypeAdapter,
+    EmailStr,
+    ValidationError,
+)
 from sqlalchemy.orm import Session
 
 from database import Base, engine, SessionLocal, get_db
@@ -21,12 +31,57 @@ app = FastAPI(
     version="1.0.0"
 )
 
+FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:5500",
+        "http://localhost:5500",
+        "null",
+    ],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class RecipientInput(BaseModel):
+    name: str
+    email: str
+
 
 class BulkCertificateRequest(BaseModel):
     event_name: str = Field(min_length=1, max_length=200)
     issue_date: str = Field(min_length=1, max_length=30)
-    recipients: list[dict[str, Any]] = Field(min_length=1, max_length=500)
+    recipients: list[RecipientInput] = Field(min_length=1, max_length=500)
 
+    @field_validator("event_name")
+    @classmethod
+    def validate_event_name(cls, value: str) -> str:
+        value = value.strip()
+
+        if not value:
+            raise ValueError("Event name cannot be empty or whitespace")
+
+        return value
+
+    @field_validator("issue_date")
+    @classmethod
+    def validate_issue_date(cls, value: str) -> str:
+        try:
+            parsed_date = date.fromisoformat(value)
+        except ValueError:
+            raise ValueError(
+                "Issue date must use YYYY-MM-DD format"
+            )
+
+        if parsed_date.isoformat() != value:
+            raise ValueError(
+                "Issue date must use YYYY-MM-DD format"
+            )
+
+        return value
 
 def process_job(job_id: str):
     db = SessionLocal()
@@ -53,8 +108,9 @@ def process_job(job_id: str):
 
                 if not name:
                     raise ValueError("Recipient name is required")
-
-                if "@" not in email or "." not in email.split("@")[-1]:
+                try:
+                    TypeAdapter(EmailStr).validate_python(email)
+                except ValidationError:
                     raise ValueError("Invalid email address")
 
                 recipient.file_path = generate_certificate(
@@ -70,18 +126,28 @@ def process_job(job_id: str):
                 recipient.status = "FAILED"
                 recipient.error_message = str(exc)[:500]
 
+            # Persist after every item: completed items survive a later failure
+            # and status polling exposes accurate in-flight progress.
+            job.success_count = db.query(Certificate).filter(
+                Certificate.job_id == job_id,
+                Certificate.status == "SUCCESS"
+            ).count()
+            job.failed_count = db.query(Certificate).filter(
+                Certificate.job_id == job_id,
+                Certificate.status == "FAILED"
+            ).count()
             db.commit()
 
+        # Recalculate from committed rows before completing the job. This also
+        # guards against a session seeing stale state after a per-item commit.
         job.success_count = db.query(Certificate).filter(
             Certificate.job_id == job_id,
             Certificate.status == "SUCCESS"
         ).count()
-
         job.failed_count = db.query(Certificate).filter(
             Certificate.job_id == job_id,
             Certificate.status == "FAILED"
         ).count()
-
         job.status = "COMPLETED"
         db.commit()
 
@@ -120,14 +186,11 @@ def create_job(
     db.add(job)
 
     for item in request.recipients:
-        raw_name = item.get("name")
-        raw_email = item.get("email")
-
         recipient = Certificate(
             id=str(uuid4()),
             job_id=job_id,
-            recipient_name=raw_name if isinstance(raw_name, str) else "",
-            recipient_email=raw_email if isinstance(raw_email, str) else "",
+            recipient_name=item.name,
+            recipient_email=item.email,
             status="PENDING"
         )
         db.add(recipient)
@@ -226,3 +289,12 @@ def list_job_certificates(
         }
         for item in recipients
     ]
+
+
+# The optional browser client is served by the same process as the API, so no
+# separate Live Server or CORS configuration is required for normal use.
+app.mount(
+    "/app",
+    StaticFiles(directory=FRONTEND_DIR, html=True),
+    name="frontend",
+)
